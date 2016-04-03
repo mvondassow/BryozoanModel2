@@ -78,6 +78,8 @@ ones)
 not be common to other similar systems; it is unknown if #3 would add realism
 (though seems likely) but similar effects occur in other systems and could
 enhance stability.
+4) Maybe use tuples in some places I used lists? (tuples immutable), or use 
+_attributes?
 
 """
 # The following two lines should reset IPython (clear variables and libraries;
@@ -126,9 +128,9 @@ class Colony:
         self.ysjig = self.ys + 0.2 * (mn % 2)  # Y positions, shifted to
         # make hexagons for plotting.
 
-        # Rowinds and colinds define lists of indices for which internal nodes
+        # Rowinds and colinds define arrays of indices for which internal nodes
         # connect to each other (in upper triangular matrix).
-        # Each node from 0 to m*n-1 connects to next node on the list.
+        # Each node from 0 to m*n-1 connects to next node in the network.
         rowinds = arange(0, m*n)
         colinds = arange(1, m*n+1)
         # delete edges connecting nodes at end of one row to beginning of next
@@ -183,9 +185,13 @@ class Colony:
         """
         Modify conductivity of edges connecting inner nodes (colony) to
         outside.
-        n
-        odeinds: list of indices of nodes to change
-        NewOuterConductivities: new conductivities to apply.
+        
+        Parameters
+        ----------
+        nodeinds : list
+            List of indices of nodes to change
+        NewOuterConductivities : list
+            List of new conductivities to apply.
         """
         if not (isinstance(NewOuterConductivities, list) and
                 isinstance(nodeinds, list)):
@@ -215,7 +221,7 @@ class Colony:
         Solve matrix equations for flows between nodes.
         First: Combines vectors of conductivities of internal edges
         (conduits) and edges connecting internal (colony) nodes to outside
-        into one diagonal matrix. (conductivitymat = C) 
+        into one diagonal matrix. (conductivitymat = C)
         Second: Adds edges connecting internal nodes to outside to incidence
         matrix. (IncidenceFull = E)
         Third: Calculates pressures based on given inflow rates (from pumps)
@@ -224,6 +230,14 @@ class Colony:
         Therefore, solve transpose(E)*C*E*p == q for p
         Then: Calculate flows (f) among all nodes (including outside node) as
         C*E*p = f
+
+        Parameters
+        ----------
+        self
+
+        Returns
+        -------
+        tuple of matrices: (Flows, Pressures)
         """
         # Combine inner and outflow conduits into one diagonal conductivity
         # matrix.
@@ -236,7 +250,7 @@ class Colony:
         IncidenceFull = sparse.vstack((
             self.Incidence, sparse.diags(([-1]*(self.m*self.n)), 0).tocsr()
             ))
-        #Calculate pressures based on Kirchoff's current law.
+        # Calculate pressures based on Kirchoff's current law.
         Pressures = sparse.csr_matrix(np.asmatrix(spsolve(
             IncidenceFull.transpose()*conductivitymat*IncidenceFull,
             self.InFlow)).transpose())
@@ -244,10 +258,64 @@ class Colony:
         # Calculate flows based on pressure, conductivities, and connectivity
         Flows = conductivitymat*IncidenceFull*Pressures
 
-        return(Flows.todense())
+        return Flows.todense(), Pressures.todense()
 
-    def colonyplot(self, addspy=True, linescale=1, dotscale=10, 
-                   outflowscale=10, innerflowscale = 40):
+    def shearlike(self, **kwargs):
+        """
+        Calculate parameter (S) comparing flow to conductivity.
+
+        This is some function that captures the notion that large conduits
+        should carry more flow than small conduits. It should be a
+        monotonically increasing function of flow (current, flux, etc) and
+        monotonically decreasing function of conductivity. Shear is one example
+        roughly analogized here:
+
+        shear*perimeter*length = pressureDrop*crosssectionArea
+
+        h = parameter with units of length (radius, width, height...)
+            describing conduit width
+
+        perimeter ~ C*h^x, 0 ≤ x ≤ 1 (x = 0 if h is separation between infinite
+            parallel plates; x = 1 if h is radius or width of conduit that
+            scales isotropically, e.g. radius of cylindrical pipe).
+        crosssectionArea ~ K*h^y, 1 ≤ y ≤ 2 (y = 1 if h is separation between
+            infinite parallel plates; y = 2 if h is radius or width of conduit
+            that scales isotropically (e.g. radius of cylindrical pipe);
+            BUT, for height of vertical parallel plates, area and perimeter
+            both x and y increase in direct proporion to height: y = x = 1.
+        Therefore, assuming conduit length is constant:
+        shear ~ pressureDrop*c*h^(y-x) : 0 ≤ (y-x) ≤ 1 (with c = K/(C*length)).
+
+        conductivity ~ d*h^w, 1 ≤ w ≤ 4 (w = 3 if h is separation of plates;
+            w = 4 if h is radius of cylindrical pipe; w = 1 if h is height of
+            parallel vertical plates (assuming their separation is much smaller
+            than their height)).
+
+        Hence: h ~ (conductivity/d)^(1/w) and:
+        shear ~ pressureDrop*c*(conductivity/d)^z, with z = ((y-x)/w)
+
+        For the three cases above:
+            separation between parallel plates: x = 0, y = 1, w = 3 : z = 1/3
+            height of vertical parallel plates: x = 1, y = 1, w = 1 : z = 0
+            radius of cylinder:                 x = 1, y = 2, w = 4 : z = 1/4
+
+        Therefore, set S = pressureDrop*b*conductivity^z, 0 ≤ z ≤ 1/3
+
+        Using kwargs should allow simpler modification for different
+        circumstances.
+        """
+        #self.solveflows(self)[1]
+        
+#        # MERGE AND REARRANGE WITH SOLVEFLOWS(): USUALLY WILL WANT EVERYTHING
+#        CALCULATED IN solveflows FOR THIS CALCULATION (e.g. for ODE solving), 
+#       but not the actual flows. Maybe split solve flows into two functions 
+#       1) returns a dictionary {a : astuff, b:bstuff} that I want 
+#       solveflows and ODE solver to use, and takes **kwargs to for
+#       parameters for solving for S; 2) solves the flows based on 
+#       the dictionary an argument to decide whether to solve for flows, and return 
+
+    def colonyplot(self, addspy=True, linescale=1, dotscale=10,
+                   outflowscale=10, innerflowscale=40):
         """
         Create plots of colony object properties
          self: Colony object
@@ -276,16 +344,16 @@ class Colony:
         plt.gca().add_collection(edges)
         # Only included these two lines setting xlim & ylim for ease if want to
         # plot just this part; not necessary if scatter plot defines x-y axes.
-        plt.xlim(-0.5, self.xs.max()+0.5)
-        plt.ylim(-0.5, self.ysjig.max()+0.5)       
+        plt.xlim(-0.5, self.xs.max() + 0.5)
+        plt.ylim(-0.5, self.ysjig.max() + 0.5)
 
         # Make scatter plot of outflow conduit conductivities (conductivities
         # between internal nodes and outside.)
         plt.scatter(self.xs, self.ysjig,
                     s=dot(dotscale, self.OutflowConduits))
 
-        # Solve for flows in network. 
-        Flows = np.array(self.solveflows())
+        # Solve for flows in network. solveflow returns (flows, pressures)
+        Flows = np.array(self.solveflows()[0])
         # Separate inner and outer flows
         OuterFlows = Flows[len(self.rowinds):]
         InnerFlows = Flows[:len(self.rowinds)].flatten()
@@ -305,15 +373,13 @@ class Colony:
                     pivot='mid', scale=innerflowscale)
 
         # Optional plot of adjacency matrix.
-        if (addspy == True):
+        if addspy:
             plt.figure()
             plt.spy(self.Adjacency)
 
 # Demonstration.
 c1 = Colony(2, 3, OutflowConductivity=0.1)  # Create colony object.
 c1.colonyplot(False, 1, 100, 100)
-c1.setouterconductivities([5,6],[10,10])
+c1.setouterconductivities([5, 6], [10, 10])
 plt.figure()
 c1.colonyplot(False, 1, 100, 100)
-
-

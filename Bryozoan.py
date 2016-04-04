@@ -95,6 +95,7 @@ from pprint import pprint  # Function to print attributes of object.
 from scipy import sparse  # Sparse library
 from scipy.sparse.linalg import spsolve
 from time import time
+from scipy.sparse.linalg import bicgstab
 
 
 # I'm not implementing this as true object oriented programming: User can alter
@@ -189,9 +190,10 @@ class Colony:
         Parameters
         ----------
         nodeinds : list
-            List of indices of nodes to change
+            List of indices of nodes to change (m*n>int>0)
         NewOuterConductivities : list
-            List of new conductivities to apply.
+            List of new conductivities to apply (numeric & >0, same length as
+            nodeinds)
         """
         if not (isinstance(NewOuterConductivities, list) and
                 isinstance(nodeinds, list)):
@@ -209,16 +211,18 @@ class Colony:
         elif any(not isinstance(item, int) for item in nodeinds):
             print('At least one node index is not an int. No action taken.')
             return
-        elif any(item < 0 for item in NewOuterConductivities):
-            print('At least conductivity is negative. No action taken.')
+        elif any(item < 0 and isinstance(item, (int, float))
+                    for item in NewOuterConductivities):
+            print('Conductivities must be floats or ints ≥0. No action taken.')
             return
         else:
             for k in range(len(nodeinds)):
                 self.OutflowConduits[nodeinds[k]] = NewOuterConductivities[k]
 
-    def solveflows(self):
+    def solvecolony(self, calcflows=True, **kwargs):
         """
-        Solve matrix equations for flows between nodes.
+        Solve matrix equations for pressures at nodes and flows between nodes.
+
         First: Combines vectors of conductivities of internal edges
         (conduits) and edges connecting internal (colony) nodes to outside
         into one diagonal matrix. (conductivitymat = C)
@@ -230,37 +234,73 @@ class Colony:
         Therefore, solve transpose(E)*C*E*p == q for p
         Then: Calculate flows (f) among all nodes (including outside node) as
         C*E*p = f
+        Using kwargs and returning values in dictionary should allow passing
+        initial calculations or approximate solutions to future calls
+        to this function
 
         Parameters
         ----------
-        self
+        self : colony object
+        **kwargs : dictionary
+            Can contain full conductivity matrix and full incidence matrix
+            (as sparse matrices), plus pressure matrix
+        calcflows : boolean
+            True: caclulate flows based on pressures
 
         Returns
         -------
-        tuple of matrices: (Flows, Pressures)
+        dictionary : 
+            dictionary has items conductivitymat (diagonal matrix of all
+            conductivities, inner and outer), IncidenceFull (incidence matrix
+            including inner and outer conductivities), and pressures
         """
         # Combine inner and outflow conduits into one diagonal conductivity
         # matrix.
-        conductivitymat = sparse.diags(
-            concatenate((self.InnerConduits, self.OutflowConduits)), 0)
+        if (kwargs.get('conductivityfull') is None):
+            conductivityfull = concatenate(
+                (self.InnerConduits, self.OutflowConduits))
+        else:
+            conductivityfull = kwargs.get('conductivityfull')
+            
         # Add edges to outside to incidence matrix. Note that only add entry
         # for internal node (tail of edge) not outside, because including
         # including outer node makes matrix only solvable to an additive
         # constant.
-        IncidenceFull = sparse.vstack((
-            self.Incidence, sparse.diags(([-1]*(self.m*self.n)), 0).tocsr()
-            ))
-        # Calculate pressures based on Kirchoff's current law.
-        Pressures = sparse.csr_matrix(np.asmatrix(spsolve(
-            IncidenceFull.transpose()*conductivitymat*IncidenceFull,
-            self.InFlow)).transpose())
+        if (kwargs.get('IncidenceFull') is None):
+            IncidenceFull = sparse.vstack((
+                self.Incidence, sparse.diags(([-1]*(self.m*self.n)), 0).tocsr()
+                ))
+        else:
+            IncidenceFull = kwargs.get('IncidenceFull')
+            
+        # Calculate pressures based on Kirchoff's current law. A few tests 
+        # indicate that the biconjugate gradient stabilized method (bicgstab)
+        # is almost 100x faster than the direct method; with an initial
+        # pressure solution, it may be 2x faster still (though my test for that
+        # may be biased: I used the direct solution as the initial estimate, so
+        # it was already right on the best value.
+        if (kwargs.get('Pressures') is None):
+            Pressures = bicgstab(
+                    IncidenceFull.transpose()*sparse.diags(conductivityfull,0)
+                    *IncidenceFull, np.asmatrix(self.InFlow).transpose())[0]            
+        else: 
+            Pressures = bicgstab(
+                IncidenceFull.transpose()*sparse.diags(conductivityfull,0)
+                *IncidenceFull, np.asmatrix(self.InFlow).transpose(), 
+                x0=kwargs.get('Pressures'))[0]
 
+        networksols = {"Pressures": Pressures, "conductivityfull":
+            conductivityfull, "IncidenceFull": IncidenceFull}
+            
         # Calculate flows based on pressure, conductivities, and connectivity
-        Flows = conductivitymat*IncidenceFull*Pressures
+        if calcflows:
+            Flows = sparse.diags(conductivityfull,0)*IncidenceFull*np.asmatrix(
+                Pressures).transpose()
+            networksols["Flows"] = Flows
 
-        return Flows.todense(), Pressures.todense()
+        return networksols
 
-    def shearlike(self, **kwargs):
+    def shearlike(self, z, **kwargs):
         """
         Calculate parameter (S) comparing flow to conductivity.
 
@@ -300,19 +340,21 @@ class Colony:
             radius of cylinder:                 x = 1, y = 2, w = 4 : z = 1/4
 
         Therefore, set S = pressureDrop*b*conductivity^z, 0 ≤ z ≤ 1/3
+        For matrix S = conductivity
 
         Using kwargs should allow simpler modification for different
         circumstances.
         """
-        #self.solveflows(self)[1]
+        if ((kwargs.get('Pressures') is None) or 
+            (kwargs.get('IncidenceFull') is None) or
+            (kwargs.get('conductivityfull') is None)):
+            kwargs = self.solvecolony(kwargs, calcflows=False)
+            
+        S = sparse.diags(kwargs.get('conductivityfull'),0)^z*kwargs.get(
+            'IncidenceFull')*np.asmatrix(kwargs.get('Pressures')).transpose()
         
-#        # MERGE AND REARRANGE WITH SOLVEFLOWS(): USUALLY WILL WANT EVERYTHING
-#        CALCULATED IN solveflows FOR THIS CALCULATION (e.g. for ODE solving), 
-#       but not the actual flows. Maybe split solve flows into two functions 
-#       1) returns a dictionary {a : astuff, b:bstuff} that I want 
-#       solveflows and ODE solver to use, and takes **kwargs to for
-#       parameters for solving for S; 2) solves the flows based on 
-#       the dictionary an argument to decide whether to solve for flows, and return 
+#        # SHOULD MAKE SO CAN CALCULATE DIFFERENT EXPONENT AND MULTIPLIER FOR 
+        # INNER AND OUTER CONDUCTIVITIES
 
     def colonyplot(self, addspy=True, linescale=1, dotscale=10,
                    outflowscale=10, innerflowscale=40):
@@ -352,8 +394,9 @@ class Colony:
         plt.scatter(self.xs, self.ysjig,
                     s=dot(dotscale, self.OutflowConduits))
 
-        # Solve for flows in network. solveflow returns (flows, pressures)
-        Flows = np.array(self.solveflows()[0])
+        # Solve for flows in network. solveflow returns flows; convert flow
+        # matrix to array.
+        Flows = np.array(self.solvecolony().get("Flows"))
         # Separate inner and outer flows
         OuterFlows = Flows[len(self.rowinds):]
         InnerFlows = Flows[:len(self.rowinds)].flatten()

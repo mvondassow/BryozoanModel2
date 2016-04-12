@@ -26,8 +26,8 @@ conduits) maintain stable chimneys
 Questions to address in project:
 1) Non-growing colony with constant network among nodes: Can chimney pattern
 be maintained? Over what range of variation in the relationships among
-conductivity, regulated parameter, and sensed parameter (e.g. shear or flow
-speed) can it be maintained?
+conductivity, regulated parameter (e.g. conductivity), and sensed parameter
+(e.g. shear or flow speed) can it be maintained?
 2) Does chimney pattern remain stable after perturbation (mimicking natural
 injuries)?
 3) To what extent does flow-regulation of conductivity enhance function (e.g.
@@ -39,12 +39,13 @@ fouling?)
 the colony grows?
 
 METHODS FOR COLONY CLASS:
-_init_: Set up colony network
+__init__ : Set up colony network
 colonyplot: plot conductivities of internal edges (lines) and edges to outside
-(dots); overlays with plot of flow to outside (stars) and (arrows) flow
-between nodes
-setouterconductivities: Modify conductivity of inner node-to-outside edges.
-solveflows: Solve for flows within network (given incurrent flows into nodes)
+    (dots); overlays with plot of flow to outside (stars) and (arrows) flow
+    between nodes
+setouterconductivities : Modify conductivity of inner node-to-outside edges.
+solvecolony : Solve for pressures, dC/dt, and flow within network (given
+    incurrent flows into nodes)
 
 ATTRIBUTES OF COLONY OBJECTS:
  'Adjacency',
@@ -62,24 +63,37 @@ ATTRIBUTES OF COLONY OBJECTS:
  'ys',
  'ysjig'
 
+Other functions
+dCdt_default : 
+
 DESIRED FEATURES:
 1) The following methods:
-???: Update colony conductivities based on flow.
+???: Update colony conductivities based on flow. (Now have function/methods to
+calculate dC/dt, but need to add method to do numerical integration of ODE.
 ???: Punch a hole in the colony (locally modify the conductivities, and keep
 them fixed).
 ???: Assess pattern (stability, chimneyishness, function)
 ???: Grow colony
+
 2) Averaging over nearby edges (conduits) to mimic the effect of having
 multiple flow paths, with correlated conductivity, associated with each zooid.
+(Could probably implement by multiplying 'S' in dCdt_default() by the sum of
+edges sharing vertices with a given edge (will need to add incidence matrix as
+an input: change __init__ and solvecolony too; should end up being something
+like: Incidence*transpose(Incidence)
+
 3) Asymmetry in flow response and aging (so zooids can respond differently to
 increased vs decreased flow, and old zooids respond differently than young
 ones)
+
+4) Maybe use tuples in some places I used lists (because tuples immutable), or
+use attributes with leading underscore (e.g. '_x') to limit accidental changes
+of calculated attributes?
+
 #2 would add realism to the model, and may be important for stability, but may
 not be common to other similar systems; it is unknown if #3 would add realism
 (though seems likely) but similar effects occur in other systems and could
 enhance stability.
-4) Maybe use tuples in some places I used lists? (tuples immutable), or use 
-_attributes?
 
 """
 # The following two lines should reset IPython (clear variables and libraries;
@@ -87,18 +101,22 @@ _attributes?
 from IPython import get_ipython
 get_ipython().magic('reset -sf')
 
+# This could use more consistency. I (MV) started trying to import each
+# function used to avoid having to type extra and reduce the amount imported if
+# I wanted to turn the script into a stand-alone program, but gave up after a
+# while.
 import matplotlib.pyplot as plt
 import numpy as np
+import copy
 from matplotlib.collections import LineCollection
 from numpy import arange, delete, concatenate, dot, vstack, hstack, stack
 from pprint import pprint  # Function to print attributes of object.
 from scipy import sparse  # Sparse library
-from scipy.sparse.linalg import spsolve
+from scipy.sparse.linalg import spsolve, bicgstab
 from time import time
-from scipy.sparse.linalg import bicgstab
+from scipy.integrate import ode
 
-
-def dCdt_fun_gen(Cs, dPs, **kwargs):
+def dCdt_default(Cs, dPs, params):
     """
     Calculate dConductivity/dt (dC/dt) and S ('shear-like') quantifier.
     
@@ -114,7 +132,11 @@ def dCdt_fun_gen(Cs, dPs, **kwargs):
         1-by-n array of conductivities (floats)
     dPs : array, dim = 1
         1-by-n array of pressure differences (floats; same length as Cs)
-    kwargs : parameters for model
+    params : dictionary
+        params must contain keys 'r', 'b', and 'z' containing parameters 
+        (numeric types) in dC/dt = r*(b*(C(i,j)^z)*dP(i,j)-1)
+        C(i, j) is conductivity between nodes i & j; dP(i,j) is pressure
+        difference between nodes i & j.
 
     Returns
     -------
@@ -129,7 +151,7 @@ def dCdt_fun_gen(Cs, dPs, **kwargs):
     h = parameter with units of length (radius, width, height...)
         describing conduit width
 
-    perimeter ~ C*h^x, 0 ≤ x ≤ 1 (x = 0 if h is separation between infinite
+    perimeter ~ A*h^x, 0 ≤ x ≤ 1 (x = 0 if h is separation between infinite
         parallel plates; x = 1 if h is radius or width of conduit that
         scales isotropically, e.g. radius of cylindrical pipe).
     crosssectionArea ~ K*h^y, 1 ≤ y ≤ 2 (y = 1 if h is separation between
@@ -138,7 +160,7 @@ def dCdt_fun_gen(Cs, dPs, **kwargs):
         BUT, for height of vertical parallel plates, area and perimeter
         both x and y increase in direct proporion to height: y = x = 1.
     Therefore, assuming conduit length is constant:
-    shear ~ pressureDrop*c*h^(y-x) : 0 ≤ (y-x) ≤ 1 (with c = K/(C*length)).
+    shear ~ pressureDrop*a*h^(y-x) : 0 ≤ (y-x) ≤ 1 (with a = K/(A*length)).
 
     conductivity ~ d*h^w, 1 ≤ w ≤ 4 (w = 3 if h is separation of plates;
         w = 4 if h is radius of cylindrical pipe; w = 1 if h is height of
@@ -146,7 +168,7 @@ def dCdt_fun_gen(Cs, dPs, **kwargs):
         than their height)).
 
     Hence: h ~ (conductivity/d)^(1/w) and:
-    shear ~ pressureDrop*(c/(d^z))*conductivity^z; z=(y-x)/w, b=c/(d^z)
+    shear ~ pressureDrop*(a/(d^z))*conductivity^z; z=(y-x)/w, b=a/(d^z)
 
     For the three cases above:
         separation between parallel plates: x = 0, y = 1, w = 3 : z = 1/3
@@ -155,14 +177,17 @@ def dCdt_fun_gen(Cs, dPs, **kwargs):
 
     Therefore, set S = b*(conductivity^z)*pressureDrop, 0 ≤ z ≤ 1/3
     As matrices (conductivity as diagonal matrix)
-        S = abs(sum(conductivity[i,j]^z*sum(Incidence[j,k]*Pressures[k])
+        S = b*abs(sum(conductivity[i,j]^z*sum(Incidence[j,k]*Pressures[k])
+        
+    Assuming dh/dt=r1*(S-s0), dC/dt = (d*h^(w-1))*dh/dt
+    dC/dt = d*(C/d)^((w-1)/w)*r*(S-s0) 
+    dC/dt = d^((2w-1)/w) * C^((w-1)/w))*r(S-s0) can parameters such that:
+    dC/dt = r*(C^q)*(S-1) with q = (w-1)/w so 0<q<3/4
     """
-    if type(Cs) is numpy.ndarray and type(dPs) is numpy.ndarray:
-        if Cs.shape ==dPs.shape:
-            S = abs(kwargs.get('b')*(Cs**kwargs.get('z'))*dPs)
-            dCdt = kwargs.get('r')*(S -1)
-            return dCdt, S
-            
+    S = abs(params.get('b')*(Cs**(params.get('z')))*dPs)
+    dCdt = params.get('r') * (Cs**params.get('q')) * (S - 1)
+    return dCdt, S
+       
 class Colony:
     """
         Colony class represents the connections and arrangement of zooids in
@@ -170,7 +195,9 @@ class Colony:
     """
     def __init__(self, nz=1, mz=1, InnerConductivity=1,
                  OutflowConductivity=1, Incurrents=-1,
-                 dCdt_inner=None, dCdt_outer=None):
+                 dCdt=dCdt_default, dCdt_in_params={
+                 'z': 0, 'b': 0, 'r': 0, 'q': 2/3}, dCdt_out_params={
+                 'z': 0, 'b': 0, 'r': 0, 'q': 2/3}):
         """
         Create a new colony given the following inputs:
 
@@ -260,8 +287,8 @@ class Colony:
         # Still need to add A) edges going out of colony
 
         # Set parameters for function for determining dConductivity/dt.
-        self.dCdt_inner = dCdt_inner
-        self.dCdt_outer = dCdt_outer
+        self.dCdt_inner = lambda x, y: dCdt(x, y, dCdt_in_params)
+        self.dCdt_outer = lambda x, y: dCdt(x, y, dCdt_out_params)
 
     def setouterconductivities(self, nodeinds, NewOuterConductivities):
         """
@@ -330,14 +357,23 @@ class Colony:
         ----------
         self : colony object
         **kwargs : dictionary
-            Can contain full conductivity matrix and full incidence matrix
+            Can contain full conductivity array and full incidence matrix
             (as sparse matrices), plus pressure matrix. Allows passing
             approximate solutions (from earlier calls) to future calls to this
             function.
+            conductivityfull : ndarray with concatenation of inner-inner and
+                inner-outer conductivities
+            IncidenceFull : csr_matrix (sparse) concatenating incidence matrix
+                for inner-inner and inner-outer nodes/edges.
+            Pressures : ndarray containing pressures at each node
+            S : ndarray containing 'shear-like' measure of fit between
+                conductivity and flow
+            Flows : numpy matrix of flows along each edge/conduit
+            dCdt : ndarray of values of dC/dt
         calcflows : boolean
             True: caclulate flows based on pressures
-        calcshearlike : boolean
-            True: caclulate S based on pressures
+        calcdCdt : boolean
+            True: caclulate dC/dt and S based on pressures
 
         Returns
         -------
@@ -349,11 +385,11 @@ class Colony:
         # Combine inner and outflow conduits into one diagonal conductivity
         # matrix.
         if (kwargs.get('conductivityfull') is None):
-            conductivityfull = sparse.diags(concatenate(
-                (self.InnerConduits, self.OutflowConduits)), 0)
+            conductivityfull = concatenate(
+                                (self.InnerConduits, self.OutflowConduits))
         else:
             conductivityfull = kwargs.get('conductivityfull')
-            
+
         # Add edges to outside to incidence matrix. Note that only add entry
         # for internal node (tail of edge) not outside, because including
         # including outer node makes matrix only solvable to an additive
@@ -373,11 +409,11 @@ class Colony:
         # it was already right on the best value.
         if (kwargs.get('Pressures') is None):
             Pressures = bicgstab(
-                    IncidenceFull.transpose()*conductivityfull
+                    IncidenceFull.transpose()*sparse.diags(conductivityfull, 0)
                     *IncidenceFull, np.asmatrix(self.InFlow).transpose())[0]            
         else: 
             Pressures = bicgstab(
-                IncidenceFull.transpose()*sparse.diags(conductivityfull,0)
+                IncidenceFull.transpose()*sparse.diags(conductivityfull, 0)
                 *IncidenceFull, np.asmatrix(self.InFlow).transpose(), 
                 x0=kwargs.get('Pressures'))[0]
 
@@ -386,20 +422,36 @@ class Colony:
             
         # Calculate flows based on pressure, conductivities, and connectivity
         if calcflows:
-            networksols["Flows"] = conductivityfull*IncidenceFull*np.asmatrix(
-                    Pressures).transpose()
+            networksols["Flows"] = sparse.diags(
+                            conductivityfull, 0)*IncidenceFull*np.asmatrix(
+                            Pressures).transpose()
 
         # Calculate match between flow and conduit size ('S' ~ shear in
         # Murray's Law) based on pressure, conductivities, and connectivity
+        # First checks that this calculation is requested, and that functions
+        # for calculating conductivities exist.
         if calcdCdt and not (self.dCdt_inner is None) and not (
                             self.dCdt_outer is None):
+            # Calculate array (1 by n*m array) of pressure differences (dP)
             dP = np.asarray(
                 abs(
                 IncidenceFull * np.asmatrix(Pressures).transpose())).flatten()
+            # Split dP into array for connected interior pairs, and array for
+            # interior-outside pairs
             dPinner = dP[:self.InnerConduits.size]
             dPouter = dP[self.InnerConduits.size:]
-            dCdt_i, S_i = self.dCdt_inner(self.InnerConduits, dPinner)
-            dCdt_o, S_o = self.dCdt_outer(self.OutflowConduits, dPouter)
+            # Check if conductivity list was passed in.
+            if (kwargs.get('conductivityfull') is None):
+                dCdt_i, S_i = self.dCdt_inner(self.InnerConduits, dPinner)
+                dCdt_o, S_o = self.dCdt_outer(self.OutflowConduits, dPouter)
+            else:
+                innerCs = kwargs.get(
+                    'conductivityfull')[:len(self.InnerConduits)]
+                outerCs = kwargs.get(
+                    'conductivityfull')[len(self.InnerConduits):]
+                dCdt_i, S_i = self.dCdt_inner(innerCs, dPinner)
+                dCdt_o, S_o = self.dCdt_outer(outerCs, dPouter)
+
             networksols["S"] = concatenate((S_i, S_o))
             networksols["dCdt"] = concatenate((dCdt_i, dCdt_o))
 
@@ -430,7 +482,8 @@ class Colony:
         # Create matplotlib.collections.LineCollection object from segments,
         # with widths defined by conduit conductivity
         edges = LineCollection(segments,
-                               linewidths = dot(linescale, self.InnerConduits))
+                               linewidths = dot(linescale, self.InnerConduits),
+                                zorder=1)
         # Plot segments.
         plt.gca().add_collection(edges)
         # Only included these two lines setting xlim & ylim for ease if want to
@@ -441,7 +494,7 @@ class Colony:
         # Make scatter plot of outflow conduit conductivities (conductivities
         # between internal nodes and outside.)
         plt.scatter(self.xs, self.ysjig,
-                    s=dot(dotscale, self.OutflowConduits))
+                    s=dot(dotscale, self.OutflowConduits), zorder=2)
 
         # Solve for flows in network. solveflow returns flows; convert flow
         # matrix to array.
@@ -451,7 +504,7 @@ class Colony:
         InnerFlows = Flows[:len(self.rowinds)].flatten()
         # Plot flow from nodes to outside
         plt.scatter(self.xs, self.ysjig, s=(outflowscale*OuterFlows).tolist(),
-                    c='r', marker='*')
+                    c='r', marker='*', zorder=3)
         # Plot flows between inner nodes. First get orientation vector (not a
         # unit vector) and its magnitude to use to determine x, y components of
         # flow vectors.
@@ -462,18 +515,72 @@ class Colony:
                    (self.ysjig[self.rowinds] + self.ysjig[self.colinds])/2,
                     InnerFlows*Orientation_Vect[0,:]/Mag_Orientation_Vect,
                     InnerFlows*Orientation_Vect[1,:]/Mag_Orientation_Vect,
-                    pivot='mid', scale=innerflowscale)
+                    color='r', pivot='mid', scale=innerflowscale, zorder=4)
 
         # Optional plot of adjacency matrix.
         if addspy:
             plt.figure()
             plt.spy(self.Adjacency)
+            
+    def UpdateColony(self, tmax=1):
+        """
+        ODE integration. odeint() seems slow and error prone; try ode() with
+        RungaKutta method (dopri5).
+
+        This variant transforms to working with the ln(Conductivity) to try to
+        reduce problems with values going negative. Still can get bogged down
+        in some spots.
+
+        Parameters
+        ----------
+        tmax : float or int
+
+        Returns
+        -------
+        ndarray (numeric; dimensions 1 x # of edges) of updated conductivities.       
+        """
+        params = self.solvecolony(calcdCdt=False, calcflows=False)
+        lnC0 = np.log(params.get('conductivityfull'))
+        def dlnCdt(t, lnC0):
+            C0 = np.exp(lnC0)
+            dCdt = self.solvecolony(calcdCdt=True, calcflows=False,
+                                Pressures=params.get('Pressures'),
+                                IncidenceFull=params.get('IncidenceFull'),
+                                conductivityfull=C0).get('dCdt')
+            return dCdt/C0
+                                
+        y = ode(dlnCdt)
+        y.set_initial_value(y=lnC0, t=0)
+        y.set_integrator('dopri5')
+        
+        return np.exp(y.integrate(tmax))
+ 
 
 # Demonstration.
-c1 = Colony(2, 3, OutflowConductivity=0.1, 
-            dCdt_inner=lambda x, y: dCdt_fun_gen(x, y, z=0.33, b=1, r=1), 
-        dCdt_outer= lambda x, y: dCdt_fun_gen(x, y, z=0.33, b=1, r=1))  # Create colony object.
-c1.colonyplot(False, 1, 100, 100)
-c1.setouterconductivities([5, 6], [10, 10])
+t=time()
+# Create colony object.
+c1 = Colony(nz=6, mz=7, OutflowConductivity=0.1, 
+            dCdt = dCdt_default, dCdt_in_params={'z': 0.33, 'b': 1, 'r': 10, 
+            'q': 0.67}, dCdt_out_params={'z': 0.25, 'b': 0.5, 'r': 10,
+            'q': 0.75})
+#c1.colonyplot(False, 1, 100, 100)
+c1.setouterconductivities([41], [1])
 plt.figure()
-c1.colonyplot(False, 1, 100, 100)
+c1.colonyplot(False, linescale=3, dotscale=80, outflowscale = 50,
+              innerflowscale=40)
+
+
+newcs = c1.UpdateColony()
+c2 = copy.deepcopy(c1)
+c2.InnerConduits = newcs[0:len(c1.InnerConduits)]
+c2.OutflowConduits = newcs[len(c1.InnerConduits):]
+plt.figure()
+c2.colonyplot(False, linescale=3, dotscale=80, outflowscale = 50,
+              innerflowscale=40)
+print(time()-t)
+
+# MAY BE A PROBLEM USING SOLVER IF VALUES EVER GO NEGATIVE...PERHAPS IT WOULD
+# WORK BETTER IF REFRAMED IN Ln(Conductivity) SO GOING NEGATIVE WOULDN'T CAUSE
+# PROBLEMS? OR NEED SPECIAL CASE FOR NEGATIVE VALUES (JUST SET dC/dt = 0 for
+# C=0)? LOG CONDUCTIVITY IS APPEALING BUT CAN'T SET ANY CONDUCTIVITIES TO 0)
+# Seems to work a bit faster (for some circumstances) with log-transformation.

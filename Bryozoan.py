@@ -46,6 +46,9 @@ colonyplot: plot conductivities of internal edges (lines) and edges to outside
 setouterconductivities : Modify conductivity of inner node-to-outside edges.
 solvecolony : Solve for pressures, dC/dt, and flow within network (given
     incurrent flows into nodes)
+UpdateColony : Perhaps this is misnamed??? Solves differential equations based
+    on dC/dt given by user. Returns new conductivities, but does not actually
+    change original colony object. 
 
 ATTRIBUTES OF COLONY OBJECTS:
  'Adjacency',
@@ -56,6 +59,8 @@ ATTRIBUTES OF COLONY OBJECTS:
  'OutflowConduits',
  'UpperAdjacency'
  'colinds',
+ 'dCdt_inner'
+ 'dCdt_outer'
  'm',
  'n',
  'rowinds',
@@ -67,13 +72,15 @@ Other functions
 dCdt_default : 
 
 DESIRED FEATURES:
-1) The following methods:
-???: Update colony conductivities based on flow. (Now have function/methods to
-calculate dC/dt, but need to add method to do numerical integration of ODE.
-???: Punch a hole in the colony (locally modify the conductivities, and keep
-them fixed).
-???: Assess pattern (stability, chimneyishness, function)
-???: Grow colony
+1) The following methods to do the following:
+Improve update colony conductivities based on flow. Now have functions to
+    calculate dC/dt (based on user-defined function) and integrate the ODE, but
+    seems unreliable and slow.
+Punch a hole in the colony (locally modify the conductivities, and keep
+    them fixed).
+Assess the pattern (e.g. it's stability, chimneyishness, or aspects of
+    performance)
+Grow the colony colony
 
 2) Averaging over nearby edges (conduits) to mimic the effect of having
 multiple flow paths, with correlated conductivity, associated with each zooid.
@@ -190,8 +197,31 @@ def dCdt_default(Cs, dPs, params):
        
 class Colony:
     """
-        Colony class represents the connections and arrangement of zooids in
-        a sheet-like bryozoan colony.
+        The Colony class represents the connections and arrangement of zooids
+        in a sheet-like bryozoan colony.
+
+        The colony geometry is a cylinder: the left and right sides connect to
+        each other. Because of the hexagonal packing of lophophores (the
+        tentacle crowns driving the flow and forming the conduits) it is easier
+        to represent the colony spiraling around the cylinder (hence the slant
+        in the plot of the x-y positions of the nodes). The lower side has
+        closed boundary (or mirror symmetry). Currently, the upper boundary is
+        also closed, but in future iterations it should be modified to become
+        the growing edge, with special outflow conditions.
+
+        Inner nodes (plotted as dots by ColonyPlot) represent the corners
+        where three lophophores meet, so 6 nodes surround each lophophore. 
+        Hence, the inner edges (plotted as lines) are the open spaces under the
+        canopy between the bases of the lophophores. Only inner nodes and edges
+        are represented in the Incidence, Laplacian, and Adjacency matrices
+        stored as Colony attributes. Their conductivities are represented in
+        InnerConduits.
+
+        Outflow conductivities represents gaps allowing flow to the outside
+        (including chimneys). These edges (in OutflowConduits) connect the
+        inner nodes to the outside. They are added to the network in
+        SolveColony, but it is easier to treat them separately in other methods
+        because they behave differently.
     """
     def __init__(self, nz=1, mz=1, InnerConductivity=1,
                  OutflowConductivity=1, Incurrents=-1,
@@ -469,9 +499,10 @@ class Colony:
          innerflowscale: magnitude of inner flow vectors divided by
          innerflowscale for the plot.
 
-        Plots produced: Plots circles for nodes (scaled by conductivity to
-        outside node), lines for edges between nodes (width scaled to
-        conductivity), and quiver plot for flows between internal nodes.
+        Plots produced: Plots circles for inner nodes (scaled by conductivity
+        to outside node), lines for edges between inner nodes (width scaled to
+        conductivity), a quiver plot for flows between inner nodes, and stars
+        for flows to outside node (scaled by flow magnitude).
         """
         # Plot lines for edges among internal nodes; line width: conductivity
         # Convert coordinates of node-pairs to x-y coordinates of line segments
@@ -556,7 +587,7 @@ class Colony:
         return np.exp(y.integrate(tmax))
  
 
-# Demonstration.
+# Demonstration. Example of how these functions work.
 t=time()
 # Create colony object.
 c1 = Colony(nz=6, mz=7, OutflowConductivity=0.1, 
@@ -583,4 +614,5 @@ print(time()-t)
 # WORK BETTER IF REFRAMED IN Ln(Conductivity) SO GOING NEGATIVE WOULDN'T CAUSE
 # PROBLEMS? OR NEED SPECIAL CASE FOR NEGATIVE VALUES (JUST SET dC/dt = 0 for
 # C=0)? LOG CONDUCTIVITY IS APPEALING BUT CAN'T SET ANY CONDUCTIVITIES TO 0)
-# Seems to work a bit faster (for some circumstances) with log-transformation.
+# Tried using Log(conductivity) in solver. Seems to work a bit faster (for
+# some circumstances), but still unreliable and slow.

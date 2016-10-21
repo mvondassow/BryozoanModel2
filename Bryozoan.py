@@ -165,29 +165,30 @@ def dCdt_default(Cs, dPs, params):
 
     Justification for form of S & dC/dt:
     ------------------------------------
-    shear*perimeter*length = pressureDrop*crosssectionArea
+    shearStress*perimeter*length = pressureDrop*crosssectionArea
 
     h = parameter with units of length (radius, width, height...)
         describing conduit width
 
-    perimeter ~ A*h^x, 0 ≤ x ≤ 1 (x = 0 if h is separation between infinite
-        parallel plates; x = 1 if h is radius or width of conduit that
-        scales isotropically, e.g. radius of cylindrical pipe).
+    perimeter ~ A*h^x, 0 ≤ x ≤ 1 (A is constant of proportionality;
+        x = 0 if h is separation between infinite parallel plates;
+        x = 1 if h is radius or width of conduit that scales
+        isotropically, e.g. radius of cylindrical pipe).
     crosssectionArea ~ K*h^y, 1 ≤ y ≤ 2 (y = 1 if h is separation between
         infinite parallel plates; y = 2 if h is radius or width of conduit
         that scales isotropically (e.g. radius of cylindrical pipe);
         BUT, for height of vertical parallel plates, area and perimeter
         both x and y increase in direct proporion to height: y = x = 1.
     Therefore, assuming conduit length is constant:
-    shear ~ pressureDrop*a*h^(y-x) : 0 ≤ (y-x) ≤ 1 (with a = K/(A*length)).
+    shearStress ~ pressureDrop*a*h^(y-x) : 0 ≤ (y-x) ≤ 1 (with a = K/(A*length)).
 
     conductivity ~ d*h^w, 1 ≤ w ≤ 4 (w = 3 if h is separation of plates;
         w = 4 if h is radius of cylindrical pipe; w = 1 if h is height of
-        parallel vertical plates (assuming their separation is much smaller
-        than their height)).
+        parallel vertical plates, assuming their separation is much smaller
+        than their height; d is a constant).
 
     Hence: h ~ (conductivity/d)^(1/w) and:
-    shear ~ pressureDrop*(a/(d^z))*conductivity^z; z=(y-x)/w, b=a/(d^z)
+    shearStress ~ pressureDrop*(a/(d^z))*conductivity^z; z=(y-x)/w, b=a/(d^z)
 
     For the three cases above:
         separation between parallel plates: x = 0, y = 1, w = 3 : z = 1/3
@@ -198,10 +199,11 @@ def dCdt_default(Cs, dPs, params):
     As matrices (conductivity as diagonal matrix)
         S = b*abs(sum(conductivity[i,j]^z*sum(Incidence[j,k]*Pressures[k])
         
-    Assuming dh/dt=r1*(S-s0), dC/dt = (d*h^(w-1))*dh/dt
-    dC/dt = d*(C/d)^((w-1)/w)*r*(S-s0) 
-    dC/dt = d^((2w-1)/w) * C^((w-1)/w))*r(S-s0) can parameters such that:
-    dC/dt = r*(C^q)*(S-1) with q = (w-1)/w so 0<q<3/4
+    Assuming dh/dt=r*(S-s0) (r is a constant), dC/dt = (d*h^(w-1))*dh/dt
+    hence: dC/dt = d*(C/d)^((w-1)/w)*r*(S-s0) 
+    dC/dt = d^((2w-1)/w) * C^((w-1)/w))*r*(S-s0) 
+    One can choose parameters such that:
+    dC/dt = r2*(C^((w-1)/w))*(S-1)
     """
     w = params.get('w')
     z = params.get('yminusx')/w

@@ -11,30 +11,31 @@ strengthening connections that experience high use depend significantly on the
 underlying connectivity and physics? And B) what features could give stability
 to systems that use this kind of feedback?
 
-Bryozoans appear to use a similar form of flow-regulated development (where
-conduits with high flow grow and -- possibly, though no data yet -- conduits
-with low flow shrink) as blood vessels and plasmodial slime molds, but these
-systems have very different geometries, pumps, functions, and evolutionary
-history (a similar kind of feedback rule also occurs in the nervous and
-skeletal systems and wood, with -- of course -- many differences too).
-Looking at bryozoans might suggest some shared princples across these systems.
+Bryozoans appear to use a similar form of flow-regulated development to the
+feedback between flow and vessel growth in blood vessels and plasmodial slime
+molds, but these systems have very different geometries, pumps, functions, and
+evolutionary histories. In each, conduits with high flow grow and -- possibly,
+though no data yet for bryoz. -- conduits with low flow shrink. A similar kind
+of feedback rule also occurs in the nervous and skeletal systems and in wood,
+with -- of course -- many differences too. Looking at bryozoans might suggest
+some shared princples across these systems.
 
 This script is meant to become a simple resistive-network model of a bryozoan
 colony to see if this rule (high-flow -> large conduits; low-flow -> small
 conduits) maintain stable chimneys
 
 Questions to address in project:
-1) Non-growing colony with constant network among nodes: Can chimney pattern
-be maintained? Over what range of variation in the relationships among
+1) Can chimney pattern be maintained in a non-growing colony with constant
+network among nodes? Over what range of variation in the relationships among
 conductivity, regulated parameter (e.g. conductivity), and sensed parameter
 (e.g. shear or flow speed) can it be maintained?
 2) Does chimney pattern remain stable after perturbation (mimicking natural
 injuries)?
 3) To what extent does flow-regulation of conductivity enhance function (e.g.
 reduce costs of pumping + material, or maximize excurrent velocity) when the
-algorithm does not match the physics precisely? (e.g. how well does it tolerate
-changes in the relationship between geometry and conductivity with epibiont
-fouling?)
+control mechanism does not match the physics precisely? (e.g. how well does it
+tolerate changes in the relationship between geometry and conductivity with
+epibiont fouling?)
 4) Can flow-regulation of conduit size explain formation of chimney pattern as
 the colony grows?
 
@@ -46,9 +47,9 @@ colonyplot: plot conductivities of internal edges (lines) and edges to outside
 setouterconductivities : Modify conductivity of inner node-to-outside edges.
 solvecolony : Solve for pressures, dC/dt, and flow within network (given
     incurrent flows into nodes)
-UpdateColony : Perhaps this is misnamed??? Solves differential equations based
+UpdateColony : Perhaps this is misnamed? Solves differential equations based
     on dC/dt given by user. Returns new conductivities, but does not actually
-    change original colony object. 
+    change original colony object.
 
 ATTRIBUTES OF COLONY OBJECTS:
  'Adjacency',
@@ -69,25 +70,28 @@ ATTRIBUTES OF COLONY OBJECTS:
  'ysjig'
 
 Other functions
-dCdt_default : 
+dCdt_default : Default function for calculating dConductivity/dt
 
 DESIRED FEATURES:
-1) The following methods to do the following:
-Improve update colony conductivities based on flow. Now have functions to
+1) Methods to do the following:
+1.1 Improve update colony conductivities based on flow. Now have functions to
     calculate dC/dt (based on user-defined function) and integrate the ODE, but
     seems unreliable and slow.
-Punch a hole in the colony (locally modify the conductivities, and keep
+1.2 Punch a hole in the colony (locally modify the conductivities, and keep
     them fixed).
-Assess the pattern (e.g. it's stability, chimneyishness, or aspects of
+1.3 Assess the pattern (e.g. it's stability, chimneyishness, or aspects of
     performance)
-Grow the colony colony
+1.4 Grow the colony
+1.5 To speed up search through parameter space, define a function to assess
+    whether a parameter set is satisfactory based on dConductivity/dt at a
+    specific initial condition.
 
 2) Averaging over nearby edges (conduits) to mimic the effect of having
-multiple flow paths, with correlated conductivity, associated with each zooid.
-(Could probably implement by multiplying 'S' in dCdt_default() by the sum of
+multiple flow paths (with correlated conductivity) associated with each zooid.
+Could probably implement by multiplying 'S' in dCdt_default() by the sum of
 edges sharing vertices with a given edge (will need to add incidence matrix as
 an input: change __init__ and solvecolony too; should end up being something
-like: Incidence*transpose(Incidence)
+like: Incidence*transpose(Incidence))
 
 3) Asymmetry in flow response and aging (so zooids can respond differently to
 increased vs decreased flow, and old zooids respond differently than young
@@ -97,10 +101,17 @@ ones)
 use attributes with leading underscore (e.g. '_x') to limit accidental changes
 of calculated attributes?
 
+5) Add limits/interactions on outflow conductivity. If outfloc conductivity can
+grow without bound, it is unrealistic (because their combined areas cannot be
+greater than the colony area), and may mean that it is hard to have stable
+conduits within the colony (because flow through one conduit should be easier
+than flow through a series).
+
 #2 would add realism to the model, and may be important for stability, but may
 not be common to other similar systems; it is unknown if #3 would add realism
 (though seems likely) but similar effects occur in other systems and could
-enhance stability.
+enhance stability. #5 would add realism, and should be similar to any system
+with similar geometry, but adds extra parameters.
 
 """
 # The following two lines should reset IPython (clear variables and libraries;
@@ -123,10 +134,11 @@ from scipy.sparse.linalg import spsolve, bicgstab
 from time import time
 from scipy.integrate import ode
 
+
 def dCdt_default(Cs, dPs, params):
     """
     Calculate dConductivity/dt (dC/dt) and S ('shear-like') quantifier.
-    
+
     S captures the notion that large conduits should
     carry more flow than small conduits. It should be monotonically
     increasing function of flow (current, flux, etc) and monotonically
@@ -140,7 +152,7 @@ def dCdt_default(Cs, dPs, params):
     dPs : array, dim = 1
         1-by-n array of pressure differences (floats; same length as Cs)
     params : dictionary
-        params must contain keys 'r', 'b', and 'z' containing parameters 
+        params must contain keys 'r', 'b', and 'z' containing parameters
         (numeric types) in dC/dt = r*(b*(C(i,j)^z)*dP(i,j)-1)
         C(i, j) is conductivity between nodes i & j; dP(i,j) is pressure
         difference between nodes i & j.
@@ -191,8 +203,12 @@ def dCdt_default(Cs, dPs, params):
     dC/dt = d^((2w-1)/w) * C^((w-1)/w))*r(S-s0) can parameters such that:
     dC/dt = r*(C^q)*(S-1) with q = (w-1)/w so 0<q<3/4
     """
-    S = abs(params.get('b')*(Cs**(params.get('z')))*dPs)
-    dCdt = params.get('r') * (Cs**params.get('q')) * (S - 1)
+    w = params.get('w')
+    z = params.get('yminusx')/w
+    # Added line to set floor on conductivities.
+    Cs[Cs < 0] = 0
+    S = abs(params.get('b')*(Cs**z)*dPs)
+    dCdt = params.get('r') * (Cs**((w-1)/w)) * (S - 1)
     return dCdt, S
        
 class Colony:
@@ -226,8 +242,8 @@ class Colony:
     def __init__(self, nz=1, mz=1, InnerConductivity=1,
                  OutflowConductivity=1, Incurrents=-1,
                  dCdt=dCdt_default, dCdt_in_params={
-                 'z': 0, 'b': 0, 'r': 0, 'q': 2/3}, dCdt_out_params={
-                 'z': 0, 'b': 0, 'r': 0, 'q': 2/3}):
+                 'yminusx': 0.5, 'b': 0, 'r': 0, 'w': 2}, dCdt_out_params={
+                 'yminusx': 1, 'b': 0, 'r': 0, 'w': 4}):
         """
         Create a new colony given the following inputs:
 
@@ -558,9 +574,7 @@ class Colony:
         ODE integration. odeint() seems slow and error prone; try ode() with
         RungaKutta method (dopri5).
 
-        This variant transforms to working with the ln(Conductivity) to try to
-        reduce problems with values going negative. Still can get bogged down
-        in some spots.
+        This variant simply sets a floor of zero on conductivities.
 
         Parameters
         ----------
@@ -568,47 +582,55 @@ class Colony:
 
         Returns
         -------
-        ndarray (numeric; dimensions 1 x # of edges) of updated conductivities.       
+        ndarray (numeric; dimensions 1 x # of edges) of updated conductivities. 
         """
         params = self.solvecolony(calcdCdt=False, calcflows=False)
-        lnC0 = np.log(params.get('conductivityfull'))
-        def dlnCdt(t, lnC0):
-            C0 = np.exp(lnC0)
-            dCdt = self.solvecolony(calcdCdt=True, calcflows=False,
+        C0 = params.get('conductivityfull')
+        def dCdt_simpleinputs(t, C0):
+            C0[C0 < 0] = 0
+            dCdt_vals = self.solvecolony(calcdCdt=True, calcflows=False,
                                 Pressures=params.get('Pressures'),
                                 IncidenceFull=params.get('IncidenceFull'),
                                 conductivityfull=C0).get('dCdt')
-            return dCdt/C0
-                                
-        y = ode(dlnCdt)
-        y.set_initial_value(y=lnC0, t=0)
+            return dCdt_vals
+
+        y = ode(dCdt_simpleinputs)
         y.set_integrator('dopri5')
-        
-        return np.exp(y.integrate(tmax))
- 
+        sol = []
+        def solout(tcurrent, ytcurrent):
+            sol.append([tcurrent, ytcurrent])
+
+        y.set_solout(solout)
+        y.set_initial_value(y=C0, t=0)
+        yfinal=y.integrate(tmax)
+
+        return sol
+
 
 # Demonstration. Example of how these functions work.
-t=time()
+
 # Create colony object.
-c1 = Colony(nz=6, mz=7, OutflowConductivity=0.1, 
-            dCdt = dCdt_default, dCdt_in_params={'z': 0.33, 'b': 1, 'r': 10, 
-            'q': 0.67}, dCdt_out_params={'z': 0.25, 'b': 0.5, 'r': 10,
-            'q': 0.75})
-#c1.colonyplot(False, 1, 100, 100)
-c1.setouterconductivities([41], [1])
+c1 = Colony(nz=6, mz=7, OutflowConductivity=0.1,
+            dCdt=dCdt_default, dCdt_in_params={
+                 'yminusx': 0.5, 'b': 5, 'r': 10, 'w': 2}, dCdt_out_params={
+                 'yminusx': 1, 'b': 1, 'r': 10, 'w': 4})
+# c1.colonyplot(False, 1, 100, 100)
+c1.setouterconductivities([41], [0.2])
 plt.figure()
-c1.colonyplot(False, linescale=3, dotscale=80, outflowscale = 50,
+c1.colonyplot(False, linescale=3, dotscale=80, outflowscale=50,
               innerflowscale=40)
 
-
-newcs = c1.UpdateColony()
+t = time()
+ontogeny = c1.UpdateColony(10)
+newcs = copy.deepcopy(ontogeny[-1][1])
+print(time()-t)
 c2 = copy.deepcopy(c1)
+
 c2.InnerConduits = newcs[0:len(c1.InnerConduits)]
 c2.OutflowConduits = newcs[len(c1.InnerConduits):]
 plt.figure()
-c2.colonyplot(False, linescale=3, dotscale=80, outflowscale = 50,
+c2.colonyplot(False, linescale=3, dotscale=80, outflowscale=50,
               innerflowscale=40)
-print(time()-t)
 
 # MAY BE A PROBLEM USING SOLVER IF VALUES EVER GO NEGATIVE...PERHAPS IT WOULD
 # WORK BETTER IF REFRAMED IN Ln(Conductivity) SO GOING NEGATIVE WOULDN'T CAUSE
@@ -616,3 +638,6 @@ print(time()-t)
 # C=0)? LOG CONDUCTIVITY IS APPEALING BUT CAN'T SET ANY CONDUCTIVITIES TO 0)
 # Tried using Log(conductivity) in solver. Seems to work a bit faster (for
 # some circumstances), but still unreliable and slow.
+
+# Now sets floor of conductivities to 0 in UpdateColony and dCdt_default. 
+# Also set imaginary components to zeros?

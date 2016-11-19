@@ -47,9 +47,7 @@ colonyplot: plot conductivities of internal edges (lines) and edges to outside
 setouterconductivities : Modify conductivity of inner node-to-outside edges.
 solvecolony : Solve for pressures, dC/dt, and flow within network (given
     incurrent flows into nodes)
-UpdateColony : Perhaps this is misnamed? Solves differential equations based
-    on dC/dt given by user. Returns new conductivities, but does not actually
-    change original colony object.
+IntegrateColony : Solves differential equations based on dC/dt set in __init__.
 OutflowFraction : returns a measure of how much a node functions as a chimney
 
 ATTRIBUTES OF COLONY OBJECTS:
@@ -75,17 +73,18 @@ dCdt_default : Default function for calculating dConductivity/dt
 
 DESIRED FEATURES:
 1) Methods to do the following:
-1.1 Improve update colony conductivities based on flow. Now have functions to
+x1.1 Improve update colony conductivities based on flow. Now have functions to
     calculate dC/dt (based on user-defined function) and integrate the ODE, but
     seems unreliable and slow.
-1.2 Punch a hole in the colony (locally modify the conductivities, and keep
+x1.2 Punch a hole in the colony (locally modify the conductivities, and keep
     them fixed).
-1.3 Assess the pattern (e.g. it's stability, chimneyishness, or aspects of
+x1.3 Assess the pattern (e.g. it's stability, chimneyishness, or aspects of
     performance)
 1.4 Grow the colony
 1.5 To speed up search through parameter space, define a function to assess
     whether a parameter set is satisfactory based on dConductivity/dt at a
     specific initial condition.
+1.6 Add function to create new colony following IntegrateColony
 
 2) Averaging over nearby edges (conduits) to mimic the effect of having
 multiple flow paths (with correlated conductivity) associated with each zooid.
@@ -429,9 +428,9 @@ class Colony:
         Returns
         -------
         dictionary :
-            dictionary stores conductivitymat (diagonal matrix of all
-            conductivities, inner and outer), IncidenceFull (incidence matrix
-            including inner & outer connections), pressures, flows, S, & dC/dt
+            dictionary stores conductivityfull (matrix of all conductivities,
+            concatenating inner and outer), IncidenceFull (incidence matrix
+            concatenating inner & outer edges), pressures, flows, S, & dC/dt
         """
         # Combine inner and outflow conduits into one diagonal conductivity
         # matrix.
@@ -582,7 +581,7 @@ class Colony:
             plt.figure()
             plt.spy(self.Adjacency)
 
-    def UpdateColony(self, tmax=1):
+    def IntegrateColony(self, tmax=1):
         """
         ODE integration of conductivity over time as defined by self.dCdt
         odeint() seemed slow and error prone; therefore switched to ode() with
@@ -595,10 +594,16 @@ class Colony:
         self : colony object
         tmax : float or int
             time to integrate ODE to
+        params : dict
+            dictionary of parameters for integrator
 
         Returns
         -------
-        ndarray (numeric; dimensions 1 x # of edges) of updated conductivities.
+        List : each element is a list [t, C] with t the time point of the
+            integration step, and C a numeric numpy.ndarray of conductivities
+            at that step (C is flattened with dimensions: 1 * #edges;
+            C[0:self.InnerConduits.size] are innerconduits;
+            C[self.Innerconduits.size:] are outflow conduits).
         """
         params = self.solvecolony(calcdCdt=False, calcflows=False)
         C0 = params.get('conductivityfull')
@@ -622,7 +627,7 @@ class Colony:
 
             Returns
             -------
-            Numpy .ndarray of derivatives of conductivity with time
+            numpy.ndarray of derivatives of conductivity with time
             """
             C0[C0 < 0] = 0
             dCdt_vals = self.solvecolony(calcdCdt=True, calcflows=False,
@@ -643,11 +648,14 @@ class Colony:
         sol = []
 
         def solout(tcurrent, ytcurrent):
-            sol.append([tcurrent, ytcurrent])
+            # ytcurrent.copy() prevents ytcurrent arrays in sol from being
+            # duplicates and getting set to zero or garbage at the end.
+            sol.append((tcurrent, ytcurrent.copy()))
 
         y.set_solout(solout)
         y.set_initial_value(y=C0, t=0)
-        yfinal = y.integrate(tmax)
+        # yfinal = y.integrate(tmax)
+        y.integrate(tmax)
 
         return sol
 
@@ -675,50 +683,62 @@ class Colony:
 
         return self.OutflowConduits.size * (ChimOutflow/np.sum(Outflows))[0, 0]
 
+    def develop(self, tmax=1):
+        """
+        Create new colony object with conductivities updated by integration
+        of ODE
+
+        Parameters :
+        ------------
+        tmax : float
+            Time to integrate over
+
+        Returns :
+        ---------
+        newcolony : colony object with updated conductivities
+        """
+        ontogeny = self.IntegrateColony(tmax)
+        newcolony = copy.deepcopy(self)
+        newcolony.InnerConduits = np.copy(ontogeny[-1][1]
+                                          )[0:len(self.InnerConduits)]
+        newcolony.OutflowConduits = np.copy(ontogeny[-1][1]
+                                            )[len(self.InnerConduits):]
+        return newcolony
+
+# For fast search of parameter space via one step differentiation, fastest to
+# much faster to add if statement that calculate pressures from answer.
+
 # Demonstration. Example of how these functions work.
+if __name__ == '__main__':
+    demo = input('To run demo type: y')
+    if demo == 'y':
+        # Create colony object.
+        c1 = Colony(nz=6, mz=7, OutflowConductivity=0.01, dCdt=dCdt_default,
+                    dCdt_in_params={'yminusx': 1, 'b': 1, 'r': 1, 'w': 3},
+                    dCdt_out_params={'yminusx': 1, 'b': 0.1, 'r': 1, 'w': 3})
+        # Set a central outflow conduit (edge) to have higher conductivity
+        c1.setouterconductivities([41], [0.02])
+        # Create plot
+        c1.colonyplot(False, linescale=0.2, dotscale=80, outflowscale=20,
+                      innerflowscale=80)
+        # Solve dif. eqs. for c1 and put result in c2.
+        t = time()
+        c2 = c1.develop(3)
+        print(time()-t)
+        c2.colonyplot(False, linescale=0.2, dotscale=80, outflowscale=20,
+                      innerflowscale=80)
 
-# Create colony object.
-c1 = Colony(nz=6, mz=7, OutflowConductivity=0.01,
-            dCdt=dCdt_default, dCdt_in_params={
-                 'yminusx': 1, 'b': 1, 'r': 1, 'w': 3}, dCdt_out_params={
-                 'yminusx': 1, 'b': 0.1, 'r': 1, 'w': 3})
-# Set a central outflow conduit (edge) to have higher conductivity
-c1.setouterconductivities([41], [0.2])
-# Create plot
-c1.colonyplot(False, linescale=0.2, dotscale=80, outflowscale=20,
-              innerflowscale=80)
+        # Perturb colony c2 by opening up outflow in lower left, then plot.
+        c2.setouterconductivities([0], [0.2])
+        c2.colonyplot(False, linescale=0.2, dotscale=80, outflowscale=20,
+                      innerflowscale=80)
 
-# Solve differential equation system for colony c1
-t = time()
-ontogeny = c1.UpdateColony(10)
-print(time()-t)
-# Populate a new colony object (c2) from solution of c1 dif. eqs., then plot.
-newcs = copy.deepcopy(ontogeny[-1][1])
-c2 = copy.deepcopy(c1)
-c2.InnerConduits = newcs[0:len(c1.InnerConduits)]
-c2.OutflowConduits = newcs[len(c1.InnerConduits):]
-c2.colonyplot(False, linescale=0.2, dotscale=80, outflowscale=20,
-              innerflowscale=80)
-
-## Perturb colony c2 by opening up outflow in the lower left corner, then plot.
-#c2.setouterconductivities([0], [0.2])
-#c2.colonyplot(False, linescale=0.2, dotscale=80, outflowscale=20,
-#              innerflowscale=80)
-#
-## Solve dif. eqs. for c2 after perturbation.
-#t = time()
-#ontogeny = c2.UpdateColony(10)
-#print(time()-t)
-#
-## Populate new colony object (c3) with results from solving dif. eqs. for c2
-## after perturbation. Then plot.
-#newcs = copy.deepcopy(ontogeny[-1][1])
-#c3 = copy.deepcopy(c2)
-#c3.InnerConduits = newcs[0:len(c2.InnerConduits)]
-#c3.OutflowConduits = newcs[len(c2.InnerConduits):]
-#plt.figure()
-#c3.colonyplot(False, linescale=0.2, dotscale=80, outflowscale=20,
-#              innerflowscale=80)
+        # Solve dif. eqs. for c2 after perturbation, put in c3 & plot.
+        t = time()
+        c3 = c2.develop(3)
+        print(time()-t)
+        c3.colonyplot(False, linescale=0.2, dotscale=80, outflowscale=20,
+                      innerflowscale=80)
 
 # MAY BE A PROBLEM USING SOLVER IF VALUES EVER GO NEGATIVE...PERHAPS IT WOULD
 # WORK BETTER IF REFRAMED IN Ln(Conductivity) SO GOING NEGATIVE WOULDN'T CAUSE
@@ -727,7 +747,7 @@ c2.colonyplot(False, linescale=0.2, dotscale=80, outflowscale=20,
 # Tried using Log(conductivity) in solver. Seems to work a bit faster (for
 # some circumstances), but still unreliable and slow.
 
-# Now sets floor of conductivities to 0 in UpdateColony and dCdt_default.
+# Now sets floor of conductivities to 0 in IntegrateColony and dCdt_default.
 # Also set imaginary components to zeros?
 
 #
@@ -757,4 +777,13 @@ delta(C) to calculate delta(V)
 large rates) that cause the solver to go to values below zero based on its
 automatic choice of initial step. I adjusted this to set it so that the inital
 step size is low enough that it won't reach negative values in one step.
+"""
+
+"""12Nov2016: Something changes when calls SolveColony; it seems to need to
+be called before calling IntegrateColony to get sensible results, even though
+it is called as a first step in IntegrateColony...
+
+13Nov2016: It turns out that one needs to use X.copy() when appending arrays
+to sol. Otherwise a) they all are the same (usual trickyness of mutable values)
+and b) they go to zero after it clears unless yfinal is saved.
 """

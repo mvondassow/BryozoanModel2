@@ -377,7 +377,8 @@ class Colony:
             for k in range(len(nodeinds)):
                 self.OutflowConduits[nodeinds[k]] = NewOuterConductivities[k]
 
-    def solvecolony(self, calcflows=True, calcdCdt=False, **kwargs):
+    def solvecolony(self, calcpressures=True, calcflows=False, calcdCdt=False,
+                    **kwargs):
         """
         Solve matrix equations for pressures at nodes, flows between nodes, and
         'shear-like' property (S) and dC/dt (a function of S).
@@ -420,9 +421,11 @@ class Colony:
                 conductivity and flow
             Flows : numpy matrix of flows along each edge/conduit
             dCdt : ndarray of values of dC/dt
-        calcflows : boolean
-            True: caclulate flows based on pressures
-        calcdCdt : boolean
+        calcpressures : boolean, default is True
+            True : calculate pressures
+        calcflows : boolean, default is False
+            True : caclulate flows based on pressures
+        calcdCdt : boolean, default is False
             True: caclulate dC/dt and S based on pressures
 
         Returns
@@ -457,17 +460,20 @@ class Colony:
         # pressure solution, it may be 2x faster still (though my test for that
         # may be biased: I used the direct solution as the initial estimate, so
         # it was already right on the best value.
-        if (kwargs.get('Pressures') is None):
-            Pressures = bicgstab(IncidenceFull.transpose() *
-                                 sparse.diags(conductivityfull, 0) *
-                                 IncidenceFull,
-                                 np.asmatrix(self.InFlow).transpose())[0]
+        if calcpressures:
+            if (kwargs.get('Pressures') is None):
+                Pressures = bicgstab(IncidenceFull.transpose() *
+                                     sparse.diags(conductivityfull, 0) *
+                                     IncidenceFull,
+                                     np.asmatrix(self.InFlow).transpose())[0]
+            else:
+                Pressures = bicgstab(IncidenceFull.transpose() *
+                                     sparse.diags(conductivityfull, 0) *
+                                     IncidenceFull,
+                                     np.asmatrix(self.InFlow).transpose(),
+                                     x0=kwargs.get('Pressures'))[0]
         else:
-            Pressures = bicgstab(IncidenceFull.transpose() *
-                                 sparse.diags(conductivityfull, 0) *
-                                 IncidenceFull,
-                                 np.asmatrix(self.InFlow).transpose(),
-                                 x0=kwargs.get('Pressures'))[0]
+            Pressures = kwargs['Pressures']
 
         networksols = {"Pressures": Pressures, "conductivityfull":
                        conductivityfull, "IncidenceFull": IncidenceFull}
@@ -490,17 +496,11 @@ class Colony:
             # interior-outside pairs
             dPinner = dP[:self.InnerConduits.size]
             dPouter = dP[self.InnerConduits.size:]
-            # Check if conductivity list was passed in.
-            if (kwargs.get('conductivityfull') is None):
-                dCdt_i, S_i = self.dCdt_inner(self.InnerConduits, dPinner)
-                dCdt_o, S_o = self.dCdt_outer(self.OutflowConduits, dPouter)
-            else:
-                innerCs = kwargs.get(
-                    'conductivityfull')[:len(self.InnerConduits)]
-                outerCs = kwargs.get(
-                    'conductivityfull')[len(self.InnerConduits):]
-                dCdt_i, S_i = self.dCdt_inner(innerCs, dPinner)
-                dCdt_o, S_o = self.dCdt_outer(outerCs, dPouter)
+            # Split conducitivity into arrays for inner and outflow conduits
+            innerCs = networksols['conductivityfull'][:len(self.InnerConduits)]
+            outerCs = networksols['conductivityfull'][len(self.InnerConduits):]
+            dCdt_i, S_i = self.dCdt_inner(innerCs, dPinner)
+            dCdt_o, S_o = self.dCdt_outer(outerCs, dPouter)
 
             networksols["S"] = concatenate((S_i, S_o))
             networksols["dCdt"] = concatenate((dCdt_i, dCdt_o))
@@ -556,7 +556,7 @@ class Colony:
 
         # Solve for flows in network. solveflow returns flows; convert flow
         # matrix to array.
-        Flows = np.array(self.solvecolony().get("Flows"))
+        Flows = np.array(self.solvecolony(calcflows=True).get("Flows"))
         # Separate inner and outer flows
         OuterFlows = Flows[-len(self.OutflowConduits):]
         InnerFlows = Flows[:len(self.InnerConduits)].flatten()
@@ -674,7 +674,7 @@ class Colony:
         float, ratio of outflow at nodeind to total outflow
         """
         # Solve for flows in network. solveflow returns flows
-        Outflows = (self.solvecolony().get("Flows")
+        Outflows = (self.solvecolony(calcflows=True).get("Flows")
                     )[-len(self.OutflowConduits):]
         if nodeind is None:
             ChimOutflow = max(Outflows)

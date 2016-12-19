@@ -4,40 +4,10 @@ Created on Thu Feb  4 17:50:19 2016
 
 @author: Michelangelo
 
-The goal of this project is to identify general principles involved in
-function-dependent development by investigating flow-regulated patterning in
-bryozoan colonies. Two main questions include: A) Do the consequences of
-strengthening connections that experience high use depend significantly on the
-underlying connectivity and physics? And B) what features could give stability
-to systems that use this kind of feedback?
-
-Bryozoans appear to use a similar form of flow-regulated development to the
-feedback between flow and vessel growth in blood vessels and plasmodial slime
-molds, but these systems have very different geometries, pumps, functions, and
-evolutionary histories. In each, conduits with high flow grow and -- possibly,
-though no data yet for bryoz. -- conduits with low flow shrink. A similar kind
-of feedback rule also occurs in the nervous and skeletal systems and in wood,
-with -- of course -- many differences too. Looking at bryozoans might suggest
-some shared princples across these systems.
-
-This script is meant to become a simple resistive-network model of a bryozoan
-colony to see if this rule (high-flow -> large conduits; low-flow -> small
-conduits) maintain stable chimneys
-
-Questions to address in project:
-1) Can chimney pattern be maintained in a non-growing colony with constant
-network among nodes? Over what range of variation in the relationships among
-conductivity, regulated parameter (e.g. conductivity), and sensed parameter
-(e.g. shear or flow speed) can it be maintained?
-2) Does chimney pattern remain stable after perturbation (mimicking natural
-injuries)?
-3) To what extent does flow-regulation of conductivity enhance function (e.g.
-reduce costs of pumping + material, or maximize excurrent velocity) when the
-control mechanism does not match the physics precisely? (e.g. how well does it
-tolerate changes in the relationship between geometry and conductivity with
-epibiont fouling?)
-4) Can flow-regulation of conduit size explain formation of chimney pattern as
-the colony grows?
+This script is meant to become a simple resistive-network model of a feedback
+between flow and conduit size in a sheet-like bryozoan colony to see if the
+rule that high-flow causes conduits to enlarge (and low-flow causes counduits
+to shrink) can maintain stable chimneys.
 
 METHODS FOR COLONY CLASS:
 __init__ : Set up colony network
@@ -49,6 +19,8 @@ solvecolony : Solve for pressures, dC/dt, and flow within network (given
     incurrent flows into nodes)
 IntegrateColony : Solves differential equations based on dC/dt set in __init__.
 OutflowFraction : returns a measure of how much a node functions as a chimney
+develop : Create new colony object with conductivities updated by integration
+    of ODE
 
 ATTRIBUTES OF COLONY OBJECTS:
  'Adjacency',
@@ -75,7 +47,7 @@ DESIRED FEATURES:
 1) Methods to do the following:
 x1.1 Improve update colony conductivities based on flow. Now have functions to
     calculate dC/dt (based on user-defined function) and integrate the ODE, but
-    seems unreliable and slow.
+    seems slow.
 x1.2 Punch a hole in the colony (locally modify the conductivities, and keep
     them fixed).
 x1.3 Assess the pattern (e.g. it's stability, chimneyishness, or aspects of
@@ -122,18 +94,13 @@ with similar geometry, but adds extra parameters.
 from IPython import get_ipython
 get_ipython().magic('reset -sf')
 
-# This could use more consistency. I (MV) started trying to import each
-# function used to avoid having to type extra and reduce the amount imported if
-# I wanted to turn the script into a stand-alone program, but gave up after a
-# while.
 import matplotlib.pyplot as plt
 import numpy as np
 import copy
+import time
+import scipy.sparse as sparse  # Sparse matrix library
 from matplotlib.collections import LineCollection
-from numpy import arange, delete, concatenate, dot, vstack, stack
-from scipy import sparse  # Sparse library
 from scipy.sparse.linalg import bicgstab
-from time import time
 from scipy.integrate import ode
 
 
@@ -270,7 +237,7 @@ class Colony:
         # Set up numbers of nodes.
         n = nz * 2  # 2 nodes added for every zooid from left-right;
         m = mz  # 1 node added for every zooid proximal-distal
-        mn = arange(0, m * n)  # Number nodes. One node added on distal end
+        mn = np.arange(0, m * n)  # Number nodes. One node added on distal end
         # for every zooid row added.
         self.n = n
         self.m = m
@@ -285,17 +252,17 @@ class Colony:
         # Rowinds and colinds define arrays of indices for which internal nodes
         # connect to each other (in upper triangular matrix).
         # Each node from 0 to m*n-1 connects to next node in the network.
-        rowinds = arange(0, m*n)
-        colinds = arange(1, m*n+1)
+        rowinds = np.arange(0, m*n)
+        colinds = np.arange(1, m*n+1)
         # delete edges connecting nodes at end of one row to beginning of next
-        rowinds = delete(rowinds, arange(n-1, m*n, n))
-        colinds = delete(colinds, arange(n-1, m*n, n))
+        rowinds = np.delete(rowinds, np.arange(n-1, m*n, n))
+        colinds = np.delete(colinds, np.arange(n-1, m*n, n))
         # add edges connecting beginning of row to end of row
-        rowinds = concatenate((rowinds, arange(0, (m-1)*n+1, n)), axis=0)
-        colinds = concatenate((colinds, arange(n-1, m*n, n)), axis=0)
+        rowinds = np.concatenate((rowinds, np.arange(0, (m-1)*n+1, n)), axis=0)
+        colinds = np.concatenate((colinds, np.arange(n-1, m*n, n)), axis=0)
         # add edges connecting every other node to node in row ahead.
-        rowinds = concatenate((rowinds, arange(1, (m-1)*n, 2)), axis=0)
-        colinds = concatenate((colinds, arange(n, m*n, 2)), axis=0)
+        rowinds = np.concatenate((rowinds, np.arange(1, (m-1)*n, 2)), axis=0)
+        colinds = np.concatenate((colinds, np.arange(n, m*n, 2)), axis=0)
         self.rowinds = rowinds
         self.colinds = colinds
 
@@ -321,10 +288,11 @@ class Colony:
         # COO matrix sorts row indices, so convenient for finding sorted edges
         # to make incidence matrix for internal nodes.
         self.Incidence = (sparse.coo_matrix(([-1]*len(rowinds),
-                          (arange(len(rowinds)), rowinds)),
+                          (np.arange(len(rowinds)), rowinds)),
                           [UpperAdjacency.nnz, n*m]) +
                           sparse.coo_matrix(([1]*len(colinds),
-                                             (arange(len(colinds)), colinds)),
+                                             (np.arange(len(colinds)),
+                                              colinds)),
                           [len(rowinds), n*m]))
 
         # Define default conductivity for leakage from internal nodes to
@@ -438,7 +406,7 @@ class Colony:
         # Combine inner and outflow conduits into one diagonal conductivity
         # matrix.
         if (kwargs.get('conductivityfull') is None):
-            conductivityfull = concatenate(
+            conductivityfull = np.concatenate(
                                 (self.InnerConduits, self.OutflowConduits))
         else:
             conductivityfull = kwargs.get('conductivityfull')
@@ -502,8 +470,8 @@ class Colony:
             dCdt_i, S_i = self.dCdt_inner(innerCs, dPinner)
             dCdt_o, S_o = self.dCdt_outer(outerCs, dPouter)
 
-            networksols["S"] = concatenate((S_i, S_o))
-            networksols["dCdt"] = concatenate((dCdt_i, dCdt_o))
+            networksols["S"] = np.concatenate((S_i, S_o))
+            networksols["dCdt"] = np.concatenate((dCdt_i, dCdt_o))
 
         return networksols
 
@@ -534,14 +502,16 @@ class Colony:
         plt.figure()  # Create new figure.
         # Plot lines for edges among internal nodes; line width: conductivity
         # Convert coordinates of node-pairs to x-y coordinates of line segments
-        segments = stack((vstack((self.xs[self.rowinds],
-                                  self.xs[self.colinds])),
-                          vstack((self.ysjig[self.rowinds],
-                                  self.ysjig[self.colinds])))).transpose()
+        segments = np.stack((np.vstack((self.xs[self.rowinds],
+                                        self.xs[self.colinds])),
+                             np.vstack((self.ysjig[self.rowinds],
+                                        self.ysjig[self.colinds]
+                                        )))).transpose()
         # Create matplotlib.collections.LineCollection object from segments,
         # with widths defined by conduit conductivity
         edges = LineCollection(segments, zorder=1,
-                               linewidths=dot(linescale, self.InnerConduits))
+                               linewidths=np.dot(linescale,
+                                                 self.InnerConduits))
         # Plot segments.
         plt.gca().add_collection(edges)
         # Only included these two lines setting xlim & ylim for ease if want to
@@ -552,7 +522,7 @@ class Colony:
         # Make scatter plot of outflow conduit conductivities (conductivities
         # between internal nodes and outside.)
         plt.scatter(self.xs, self.ysjig,
-                    s=dot(dotscale, self.OutflowConduits), zorder=2)
+                    s=np.dot(dotscale, self.OutflowConduits), zorder=2)
 
         # Solve for flows in network. solveflow returns flows; convert flow
         # matrix to array.
@@ -566,9 +536,10 @@ class Colony:
         # Plot flows between inner nodes. First get orientation vector (not a
         # unit vector) and its magnitude to use to determine x, y components of
         # flow vectors.
-        Orientation_Vect = vstack((self.xs[self.colinds]-self.xs[self.rowinds],
-                                   self.ysjig[self.colinds] -
-                                   self.ysjig[self.rowinds]))
+        Orientation_Vect = np.vstack((self.xs[self.colinds] -
+                                      self.xs[self.rowinds],
+                                      self.ysjig[self.colinds] -
+                                      self.ysjig[self.rowinds]))
         Mag_Orientation_Vect = sum(Orientation_Vect**2)**(0.5)
         plt.quiver((self.xs[self.rowinds] + self.xs[self.colinds])/2,
                    (self.ysjig[self.rowinds] + self.ysjig[self.colinds])/2,
@@ -722,9 +693,9 @@ if __name__ == '__main__':
         c1.colonyplot(False, linescale=0.2, dotscale=80, outflowscale=20,
                       innerflowscale=80)
         # Solve dif. eqs. for c1 and put result in c2.
-        t = time()
+        t = time.time()
         c2 = c1.develop(3)
-        print(time()-t)
+        print(time.time()-t)
         c2.colonyplot(False, linescale=0.2, dotscale=80, outflowscale=20,
                       innerflowscale=80)
 
@@ -734,9 +705,9 @@ if __name__ == '__main__':
                       innerflowscale=80)
 
         # Solve dif. eqs. for c2 after perturbation, put in c3 & plot.
-        t = time()
+        t = time.time()
         c3 = c2.develop(3)
-        print(time()-t)
+        print(time.time()-t)
         c3.colonyplot(False, linescale=0.2, dotscale=80, outflowscale=20,
                       innerflowscale=80)
 

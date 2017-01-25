@@ -1,0 +1,11 @@
+Image of flow under canopy:
+Timelapse used: Dissertation_data_CDs\Backup Front view and planview\PlanviewVideos\Colony10PlanviewDay0 (tif stack from experiment descriped in M. von Dassow 2005B, J. Exp. Biol; illuminated with a red laser sheet, and with carmine particles added to seawater).
+Processed in ImageJ:
+Split into three stacks with every third frame (A: frames 1, 4, 7, ...298; B: frames 2, 5, 8, ... 299; C: frames 3, 6, 9, ... 300). Converted to standard LUT (0=black, white=255)
+For stacks, calculated difference images of stacks A, B, and C (C-B, B-A, and A-C) then merged as RGB channels, and converted composite to RGB, then took maximum using z-project (MAX_difs). Then multiplied by ~1.5 (forgot to write down exact value) to get maximum contrast (saved as 'Colony10PlanviewDay0_MaxFrameDifsAsRainbow'). 
+
+For 'Colony10PlanviewDay0_MaxFrameDifsAsRainbowPlusMedianFrames.tif': Took original stack, calculated median of stack using z-project and converted to standard LUT. Multiplied median image by 0.75, converted to RGB (MAX_median), and added to MAX_median to MAX_dif. Finally, subtracted minimum brightness value (67) and multiplied result by 2 to get maximum contrast with lophophores white.
+
+'Colony03NewChimFrontDay4_MaxFrameDifsAsRainbowPlusMedianFrames.tif' and '..._cropped.jpg': Similar to image above, but with different values for background subtraction and multiplication to enhance contrast. Cropped image for .jpg to cut out portion with frame grabber error. Timelapse was OldChimData\Colony03NewChimFrontDay4; rotated 180° for clearer orientation.
+
+Both flow images were 6.4mm wide based on scale image: OldChimData\1mmx1mmScaleGrid(-tc)2

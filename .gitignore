@@ -45,3 +45,15 @@ $RECYCLE.BIN/
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Jupyter checkpoints
+.ipynb_checkpoints
+
+# Binary pythons
+__pycache__
+*.pyc
+
+# Large images
+*.tif
+*.tiff
+*.psd

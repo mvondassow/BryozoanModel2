@@ -56,7 +56,6 @@ x1.3 Assess the pattern (e.g. it's stability, chimneyishness, or aspects of
 1.5 To speed up search through parameter space, define a function to assess
     whether a parameter set is satisfactory based on dConductivity/dt at a
     specific initial condition.
-1.6 Add function to create new colony following IntegrateColony
 
 2) Averaging over nearby edges (conduits) to mimic the effect of having
 multiple flow paths (with correlated conductivity) associated with each zooid.
@@ -121,10 +120,8 @@ def dCdt_default(Cs, dPs, params):
     dPs : array, dim = 1
         1-by-n array of pressure differences (floats; same length as Cs)
     params : dictionary
-        params must contain keys 'r', 'b', and 'z' containing parameters
-        (numeric types) in dC/dt = r*(b*(C(i,j)^z)*dP(i,j)-1)
-        C(i, j) is conductivity between nodes i & j; dP(i,j) is pressure
-        difference between nodes i & j.
+        params must contain keys 'w', 'yminusx', 'r', and 'b' for parameters
+        (all numeric types).
 
     Returns
     -------
@@ -478,7 +475,7 @@ class Colony:
         return networksols
 
     def colonyplot(self, addspy=True, linescale=1, dotscale=10,
-                   outflowscale=10, innerflowscale=40):
+                   outflowscale=10, innerflowscale=40, linepwr=1, dotpwr=1):
         """
         Create plots of colony object properties
 
@@ -495,6 +492,13 @@ class Colony:
              Multiplies symbol for outflow width
          innerflowscale : numeric
              length of inner flow arrows is divided by innerflowscale.
+         linepwr : numeric
+             allows control of whether line width is proporional to
+             conductivity or conductivity raised to a power (e.g. to represent
+             geometrical parameter)
+         dotpwr : numeric
+             allows control of whether dot area is proportional to
+             conductivity or conductivity raised to a power.
 
         Plots produced: Plots circles for inner nodes (scaled by conductivity
         to outside node), lines for edges between inner nodes (width scaled to
@@ -513,7 +517,7 @@ class Colony:
         # with widths defined by conduit conductivity
         edges = LineCollection(segments, zorder=1,
                                linewidths=np.dot(linescale,
-                                                 self.InnerConduits))
+                                                 self.InnerConduits**linepwr))
         # Plot segments.
         plt.gca().add_collection(edges)
         # Only included these two lines setting xlim & ylim for ease if want to
@@ -523,8 +527,8 @@ class Colony:
 
         # Make scatter plot of outflow conduit conductivities (conductivities
         # between internal nodes and outside.)
-        plt.scatter(self.xs, self.ysjig,
-                    s=np.dot(dotscale, self.OutflowConduits), zorder=2)
+        plt.scatter(self.xs, self.ysjig, c='c',
+                    s=np.dot(dotscale, self.OutflowConduits**dotpwr), zorder=2)
 
         # Solve for flows in network. solveflow returns flows; convert flow
         # matrix to array.
@@ -602,7 +606,7 @@ class Colony:
             -------
             numpy.ndarray of derivatives of conductivity with time
             """
-            C0[C0 < 0] = 0
+            C0 = np.maximum(C0, 0)
             dCdt_vals = self.solvecolony(calcdCdt=True, calcflows=False,
                                          Pressures=params.get('Pressures'),
                                          IncidenceFull=params.get(
@@ -611,8 +615,8 @@ class Colony:
             return dCdt_vals
 
         y = ode(dCdt_simpleinputs)
-        # Tends to take first step too big if tmax is set high, so max step
-        # size to try to prevent values from going below 0 on first step.
+        # Tends to take first step too big if tmax is set high, so set initial
+        # step size to try to prevent values from going below 0 on first step.
         dCdt0 = dCdt_simpleinputs(0, C0)
         problemvals = dCdt0 < 0
         dt0 = 0.5 * np.min(abs(

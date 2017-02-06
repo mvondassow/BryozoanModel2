@@ -48,6 +48,7 @@ Temporary Items
 
 # Jupyter checkpoints
 .ipynb_checkpoints
+*-checkpoint.ipynb
 
 # Binary pythons
 __pycache__

@@ -58,3 +58,6 @@ __pycache__
 *.tif
 *.tiff
 *.psd
+
+# Misc. ideas in progress
+Temp*
